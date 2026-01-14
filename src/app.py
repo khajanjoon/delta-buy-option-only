@@ -49,7 +49,7 @@ def get_atm_strike(spot):
     return int(round(spot / STRIKE_INTERVAL) * STRIKE_INTERVAL)
 
 
-def already_in_position(product_id):
+def position_exists(product_id):
     pos = delta_client.get_position(product_id)
     if not pos:
         return False
@@ -57,13 +57,11 @@ def already_in_position(product_id):
 
 
 def get_product_id(symbol):
-    product = delta_client.get_product(symbol)
-    return product["id"]
+    return delta_client.get_product(symbol)["id"]
 
 
 def load_existing_position(symbol, product_id):
     pos = delta_client.get_position(product_id)
-    print("Loaded existing position:", pos)
     if not pos:
         return None
 
@@ -79,56 +77,60 @@ def load_existing_position(symbol, product_id):
     }
 
 # ---------- MAIN ----------
-
-print("🚀 SELL STRADDLE + LIVE PnL STARTED")
+print("🚀 SELL STRADDLE BOT STARTED")
 
 while True:
     try:
         # ---------- LIVE PnL ----------
-        # ---------- LIVE PnL ----------
         if open_straddle["call"] and open_straddle["put"]:
-         call_ticker = delta_client.get_ticker(open_straddle["call"]["symbol"])
-         put_ticker  = delta_client.get_ticker(open_straddle["put"]["symbol"])
+            call_ticker = delta_client.get_ticker(open_straddle["call"]["symbol"])
+            put_ticker  = delta_client.get_ticker(open_straddle["put"]["symbol"])
 
-         call_ltp = float(call_ticker["mark_price"])
-         put_ltp  = float(put_ticker["mark_price"])
+            call_ltp = float(call_ticker["mark_price"])
+            put_ltp  = float(put_ticker["mark_price"])
 
-         call_entry = float(open_straddle["call"]["entry_price"])
-         put_entry  = float(open_straddle["put"]["entry_price"])
+            call_entry = open_straddle["call"]["entry_price"]
+            put_entry  = open_straddle["put"]["entry_price"]
 
-         call_qty = float(open_straddle["call"]["qty"])
-         put_qty  = float(open_straddle["put"]["qty"])
+            call_qty = open_straddle["call"]["qty"]
+            put_qty  = open_straddle["put"]["qty"]
 
-         call_pnl = (call_entry - call_ltp) * call_qty
-         put_pnl  = (put_entry - put_ltp) * put_qty
+            call_pnl = (call_entry - call_ltp) * call_qty
+            put_pnl  = (put_entry - put_ltp) * put_qty
 
-         total_pnl = call_pnl + put_pnl
+            print(
+                f"📈 PnL | CALL: {call_pnl:.2f} | "
+                f"PUT: {put_pnl:.2f} | "
+                f"TOTAL: {(call_pnl + put_pnl):.2f}"
+            )
 
-         print(
-        f"📈 PnL | CALL: {call_pnl:.2f} | "
-        f"PUT: {put_pnl:.2f} | "
-        f"TOTAL: {total_pnl:.2f}"
-      )
-
-
-        # ---------- ENTRY / DETECTION ----------
+        # ---------- MARKET DATA ----------
         expiry = get_expiry()
 
         btc = delta_client.get_ticker("BTCUSD")
         spot = float(btc["spot_price"])
         atm = get_atm_strike(spot)
 
-        call_strike = atm - ITM_DISTANCE
-        put_strike  = atm + ITM_DISTANCE
-
-        call_symbol = f"C-BTC-{call_strike}-{expiry}"
-        put_symbol  = f"P-BTC-{put_strike}-{expiry}"
+        call_symbol = f"C-BTC-{atm}-{expiry}"
+        put_symbol  = f"P-BTC-{atm}-{expiry}"
 
         call_id = get_product_id(call_symbol)
         put_id  = get_product_id(put_symbol)
 
-        # ---- EXISTING STRADDLE DETECTION ----
-        if already_in_position(call_id) and already_in_position(put_id):
+        print(f"🔁 Monitoring ATM {atm} | Expiry {expiry}")
+
+        # ---------- STRIKE CHANGE / POSITION CHECK ----------
+        if open_straddle["call"] and open_straddle["put"]:
+            old_call_id = open_straddle["call"]["product_id"]
+            old_put_id  = open_straddle["put"]["product_id"]
+
+            if not position_exists(old_call_id) or not position_exists(old_put_id):
+                print("⚠️ Old straddle not found — resetting")
+                open_straddle["call"] = None
+                open_straddle["put"]  = None
+
+        # ---------- EXISTING STRADDLE DETECTION ----------
+        if position_exists(call_id) and position_exists(put_id):
             if not open_straddle["call"] and not open_straddle["put"]:
                 open_straddle["call"] = load_existing_position(call_symbol, call_id)
                 open_straddle["put"]  = load_existing_position(put_symbol, put_id)
@@ -137,11 +139,12 @@ while True:
             time.sleep(CHECK_INTERVAL)
             continue
 
-        # ---- IF STRADDLE ALREADY TRACKED, SKIP ENTRY ----
+        # ---------- IF ALREADY TRACKING, SKIP ENTRY ----------
         if open_straddle["call"] or open_straddle["put"]:
             time.sleep(CHECK_INTERVAL)
             continue
 
+        # ---------- PLACE NEW STRADDLE ----------
         print(f"\n📊 Spot: {spot} | ATM: {atm}")
         print(f"📞 CALL: {call_symbol}")
         print(f"📉 PUT : {put_symbol}")
@@ -188,4 +191,4 @@ while True:
     except Exception as e:
         print("❌ Error:", e)
 
-    time.sleep(CHECK_INTERVAL)  
+    time.sleep(CHECK_INTERVAL)

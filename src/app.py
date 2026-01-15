@@ -13,10 +13,11 @@ API_SECRET = "B5ALo5Mh8mgUREB6oGD4oyX3y185oElaz1LoU6Y3X5ZX0s8TvFZcX4YTVToJ"
 
 BASE_URL = "https://api.india.delta.exchange"
 
-STRIKE_INTERVAL = 400
+STRIKE_INTERVAL = 200
 ORDER_SIZE = 1
 CHECK_INTERVAL = 5
 PRICE_OFFSET = 100
+MIN_SELL_PRICE = 1000
 # =========================================
 
 delta_client = DeltaRestClient(
@@ -53,24 +54,32 @@ def position_exists(product_id):
     return abs(float(pos.get("size", 0))) > 0
 
 
-def straddle_exists_for(atm, expiry):
+def get_straddle_status(atm, expiry):
     """
-    Check if BOTH CALL & PUT exist
-    for SAME strike and SAME expiry
+    Returns dict:
+    {
+        "call": True/False,
+        "put":  True/False
+    }
     """
+    status = {"call": False, "put": False}
+
     call_symbol = f"C-BTC-{atm}-{expiry}"
     put_symbol  = f"P-BTC-{atm}-{expiry}"
 
     try:
         call_id = get_product_id(call_symbol)
-        put_id  = get_product_id(put_symbol)
+        status["call"] = position_exists(call_id)
     except Exception:
-        return False
+        pass
 
-    if position_exists(call_id) and position_exists(put_id):
-        return True
+    try:
+        put_id = get_product_id(put_symbol)
+        status["put"] = position_exists(put_id)
+    except Exception:
+        pass
 
-    return False
+    return status
 
 
 # ---------- MAIN ----------
@@ -85,15 +94,16 @@ while True:
         spot = float(btc["spot_price"])
         atm = get_atm_strike(spot)
 
-        print(f"🔁 Spot {spot} | ATM {atm} | Expiry {expiry}")
+        print(f"\n🔁 Spot {spot} | ATM {atm} | Expiry {expiry}")
 
-        # -------- CHECK EXISTING STRADDLE --------
-        if straddle_exists_for(atm, expiry):
-            print("✅ Existing STRADDLE found — skipping entry")
+        # -------- CHECK STRADDLE STATUS --------
+        status = get_straddle_status(atm, expiry)
+
+        if status["call"] and status["put"]:
+            print("✅ CALL & PUT already exist — skipping both")
             time.sleep(CHECK_INTERVAL)
             continue
 
-        # -------- PLACE NEW STRADDLE --------
         call_symbol = f"C-BTC-{atm}-{expiry}"
         put_symbol  = f"P-BTC-{atm}-{expiry}"
 
@@ -110,28 +120,39 @@ while True:
             float(put_ticker["mark_price"]) - PRICE_OFFSET, 0.5
         )
 
-        call_order = create_order_format(
-            product_id=call_id,
-            size=ORDER_SIZE,
-            side="sell",
-            price=float(call_price)
-        )
+        # -------- PLACE CALL --------
+        if not status["call"]:
+            if float(call_ticker["mark_price"]) > MIN_SELL_PRICE:
+                call_order = create_order_format(
+                    product_id=call_id,
+                    size=ORDER_SIZE,
+                    side="sell",
+                    price=float(call_price)
+                )
+                print("📉 Placing CALL order")
+                delta_client.batch_create(call_id, [call_order])
+                print(f"✅ CALL SOLD | {call_symbol} @ {call_price}")
+            else:
+                print("⚠️ CALL price too low — skipped")
+        else:
+            print("⏭️ CALL already exists — skipped")
 
-        put_order = create_order_format(
-            product_id=put_id,
-            size=ORDER_SIZE,
-            side="sell",
-            price=float(put_price)
-        )
-
-        delta_client.batch_create(call_id, [call_order])
-        delta_client.batch_create(put_id, [put_order])
-
-        print(
-            f"✅ NEW STRADDLE SOLD | "
-            f"{call_symbol} @ {call_price} | "
-            f"{put_symbol} @ {put_price}"
-        )
+        # -------- PLACE PUT --------
+        if not status["put"]:
+            if float(put_ticker["mark_price"]) > MIN_SELL_PRICE:
+                put_order = create_order_format(
+                    product_id=put_id,
+                    size=ORDER_SIZE,
+                    side="sell",
+                    price=float(put_price)
+                )
+                print("📉 Placing PUT order")
+                delta_client.batch_create(put_id, [put_order])
+                print(f"✅ PUT SOLD | {put_symbol} @ {put_price}")
+            else:
+                print("⚠️ PUT price too low — skipped")
+        else:
+            print("⏭️ PUT already exists — skipped")
 
     except Exception as e:
         print("❌ Error:", e)

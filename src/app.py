@@ -32,7 +32,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # ---------- HELPERS ----------
 
 def get_expiry():
-    expiry = datetime(2026, 3, 27)
+    expiry = datetime(2026, 4, 24)
     return expiry.strftime("%d%m%y")
 
 

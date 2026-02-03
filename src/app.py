@@ -29,11 +29,17 @@ delta_client = DeltaRestClient(
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+
 # ---------- HELPERS ----------
 
-def get_expiry():
+def get_far_expiry():
     expiry = datetime(2026, 4, 24)
     return expiry.strftime("%d%m%y")
+
+
+def get_next_day_expiry():
+    tomorrow = datetime.now(IST) + timedelta(days=2)
+    return tomorrow.strftime("%d%m%y")
 
 
 def get_atm_strike(spot):
@@ -52,44 +58,73 @@ def position_exists(product_id):
 
 
 # ---------- MAIN ----------
-print("🚀 CALL OPTION BUY BOT STARTED")
+print("🚀 DIAGONAL CALL SPREAD BOT STARTED")
 
 while True:
     try:
-        expiry = get_expiry()
+        far_expiry = get_far_expiry()
+        next_expiry = get_next_day_expiry()
 
-        btc = delta_client.get_ticker("ETHUSD")
-        spot = float(btc["spot_price"])
+        ticker = delta_client.get_ticker("ETHUSD")
+        spot = float(ticker["spot_price"])
         atm = get_atm_strike(spot)
 
-        call_strike = atm - STRIKE_DISTANCE
-        call_symbol = f"C-ETH-{call_strike}-{expiry}"
-
         print(f"\n🔁 Spot {spot} | ATM {atm}")
-        print(f"📌 CALL {call_strike} | Expiry {expiry}")
 
-        call_id = get_product_id(call_symbol)
+        # ================= BUY DEEP ITM CALL =================
+        long_strike = atm - STRIKE_DISTANCE
+        long_symbol = f"C-ETH-{long_strike}-{far_expiry}"
+        print(f"📌 LONG CALL {long_strike} | Expiry {far_expiry}")
 
-        if not position_exists(call_id):
-            call_ticker = delta_client.get_ticker(call_symbol)
-            call_mark = float(call_ticker["mark_price"])
+        long_id = get_product_id(long_symbol)
 
-            if call_mark >= MIN_MARK_PRICE:
-                call_price = round_by_tick_size(call_mark + PRICE_OFFSET, 0.5)
+        if not position_exists(long_id):
+            long_ticker = delta_client.get_ticker(long_symbol)
+            long_mark = float(long_ticker["mark_price"])
 
-                call_order = create_order_format(
-                    product_id=call_id,
+            if long_mark >= MIN_MARK_PRICE:
+                long_price = round_by_tick_size(long_mark + PRICE_OFFSET, 0.5)
+
+                long_order = create_order_format(
+                    product_id=long_id,
                     size=ORDER_SIZE,
                     side="buy",
-                    price=call_price
+                    price=long_price
                 )
 
-                delta_client.batch_create(call_id, [call_order])
-                print(f"✅ CALL BOUGHT | {call_symbol} @ {call_price}")
+                delta_client.batch_create(long_id, [long_order])
+                print(f"✅ BOUGHT LONG CALL @ {long_price}")
             else:
-                print(f"⚠️ CALL skipped (mark {call_mark} < {MIN_MARK_PRICE})")
+                print(f"⚠️ Long skipped (mark {long_mark} too low)")
         else:
-            print("⏭️ CALL position already exists")
+            print("⏭️ Long call already exists")
+
+        # ================= SELL ATM CALL (NEXT DAY) =================
+        short_strike = atm
+        short_symbol = f"C-ETH-{short_strike}-{next_expiry}"
+        print(f"📌 SHORT CALL {short_strike} | Expiry {next_expiry}")
+
+        short_id = get_product_id(short_symbol)
+
+        if position_exists(long_id) and not position_exists(short_id):
+
+            short_ticker = delta_client.get_ticker(short_symbol)
+            short_mark = float(short_ticker["mark_price"])
+
+            short_price = round_by_tick_size(short_mark - PRICE_OFFSET, 0.5)
+
+            short_order = create_order_format(
+                product_id=short_id,
+                size=ORDER_SIZE,
+                side="sell",
+                price=short_price
+            )
+
+            delta_client.batch_create(short_id, [short_order])
+            print(f"💰 SOLD ATM CALL @ {short_price}")
+
+        else:
+            print("⏭️ Short call exists or hedge missing")
 
     except Exception as e:
         print("❌ Error:", e)
